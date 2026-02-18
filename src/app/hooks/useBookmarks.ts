@@ -11,11 +11,13 @@ function normalizeUrl(input: string): string {
   return `https://${trimmed}`;
 }
 
+type RealtimeStatus = "enabled" | "disabled" | "error";
+
 type UseBookmarksResult = {
   bookmarks: Bookmark[];
   loading: boolean;
   error: string | null;
-  realtimeStatus: "enabled" | "disabled";
+  realtimeStatus: RealtimeStatus;
   addBookmark: (payload: { title: string; url: string }) => Promise<void>;
   deleteBookmark: (bookmarkId: string) => Promise<void>;
   refresh: () => Promise<void>;
@@ -25,13 +27,14 @@ export function useBookmarks(userId: string | null | undefined): UseBookmarksRes
   const [bookmarks, setBookmarks] = useState<Bookmark[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [realtimeStatus, setRealtimeStatus] = useState<"enabled" | "disabled">("disabled");
-  const channelRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
+  const [realtimeStatus, setRealtimeStatus] = useState<RealtimeStatus>("disabled");
 
+  const channelRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
   const canQuery = useMemo(() => Boolean(userId), [userId]);
 
   const refresh = useCallback(async () => {
     if (!userId) return;
+
     setLoading(true);
     setError(null);
 
@@ -55,26 +58,31 @@ export function useBookmarks(userId: string | null | undefined): UseBookmarksRes
     if (!canQuery) {
       setBookmarks([]);
       setRealtimeStatus("disabled");
+      // cleanup any old channel if user logs out / changes
+      if (channelRef.current) {
+        supabase.removeChannel(channelRef.current);
+        channelRef.current = null;
+      }
       return;
     }
 
     void refresh();
 
-    // Prevent duplicate realtime subscriptions (hot reload etc.)
+    // prevent duplicate subscriptions (hot reload / user switch)
     if (channelRef.current) {
       supabase.removeChannel(channelRef.current);
       channelRef.current = null;
     }
 
     const channel = supabase
-      .channel(`bookmarks:user:${userId}`)
+      .channel("bookmarks-realtime")
       .on(
         "postgres_changes",
         {
           event: "*",
           schema: "public",
           table: "bookmarks",
-          filter: `user_id=eq.${userId}`,
+          // IMPORTANT: no filter here — DELETE payload may not include user_id
         },
         () => {
           void refresh();
@@ -82,6 +90,8 @@ export function useBookmarks(userId: string | null | undefined): UseBookmarksRes
       )
       .subscribe((status) => {
         if (status === "SUBSCRIBED") setRealtimeStatus("enabled");
+        if (status === "CHANNEL_ERROR") setRealtimeStatus("error");
+        if (status === "CLOSED") setRealtimeStatus("disabled");
       });
 
     channelRef.current = channel;
@@ -93,7 +103,7 @@ export function useBookmarks(userId: string | null | undefined): UseBookmarksRes
       }
       setRealtimeStatus("disabled");
     };
-  }, [canQuery, refresh, userId]);
+  }, [canQuery, refresh]);
 
   const addBookmark = useCallback(
     async ({ title, url }: { title: string; url: string }) => {
