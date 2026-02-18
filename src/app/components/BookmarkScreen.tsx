@@ -12,12 +12,23 @@ type Props = {
 };
 
 export function BookmarksScreen({ userId, email, onSignOut }: Props) {
-  const { bookmarks, loading, error, realtimeStatus, addBookmark, deleteBookmark, refresh } =
-    useBookmarks(userId);
+  const {
+    bookmarks,
+    loading,
+    error,
+    realtimeStatus,
+    isAdding,
+    deletingIds,
+    addBookmark,
+    deleteBookmark,
+    refresh,
+  } = useBookmarks(userId);
 
   const realtimeLabel = useMemo(() => {
     return realtimeStatus === "enabled" ? "Realtime enabled (try 2 tabs)" : "Realtime connecting…";
   }, [realtimeStatus]);
+
+  const isDeletingAny = deletingIds.size > 0;
 
   return (
     <div className="w-full max-w-3xl">
@@ -43,7 +54,8 @@ export function BookmarksScreen({ userId, email, onSignOut }: Props) {
       </div>
 
       <div className="mt-4">
-        <BookmarkForm onAdd={addBookmark} onRefresh={refresh} busy={loading} />
+        {/* ✅ busy now includes add + delete to avoid spamming actions */}
+        <BookmarkForm onAdd={addBookmark} onRefresh={refresh} busy={loading || isAdding || isDeletingAny} />
 
         {error ? (
           <div className="mt-4 rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-200">
@@ -51,8 +63,13 @@ export function BookmarksScreen({ userId, email, onSignOut }: Props) {
           </div>
         ) : null}
 
-        {loading ? <p className="mt-4 text-sm text-white/55">Loading…</p> : null}
-        <BookmarkList items={bookmarks} onDelete={deleteBookmark} busy={loading} />
+        {/* ✅ Better status text */}
+        {loading ? <p className="mt-4 text-sm text-white/55">Loading bookmarks…</p> : null}
+        {isAdding ? <p className="mt-2 text-sm text-white/55">Adding bookmark…</p> : null}
+        {isDeletingAny ? <p className="mt-2 text-sm text-white/55">Deleting…</p> : null}
+
+        {/* ✅ keep same API; disable delete while deleting to avoid duplicate clicks */}
+        <BookmarkList items={bookmarks} onDelete={deleteBookmark} busy={loading || isDeletingAny} />
       </div>
 
       <p className="mt-6 text-xs text-white/45">

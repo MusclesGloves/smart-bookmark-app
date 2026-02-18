@@ -16,6 +16,11 @@ type UseBookmarksResult = {
   loading: boolean;
   error: string | null;
   realtimeStatus: "enabled" | "disabled";
+
+  // ✅ Step 2 additions
+  isAdding: boolean;
+  deletingIds: Set<string>;
+
   addBookmark: (payload: { title: string; url: string }) => Promise<void>;
   deleteBookmark: (bookmarkId: string) => Promise<void>;
   refresh: () => Promise<void>;
@@ -32,6 +37,10 @@ export function useBookmarks(userId: string | null | undefined): UseBookmarksRes
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [realtimeStatus, setRealtimeStatus] = useState<"enabled" | "disabled">("disabled");
+
+  // ✅ Step 2 additions
+  const [isAdding, setIsAdding] = useState(false);
+  const [deletingIds, setDeletingIds] = useState<Set<string>>(new Set());
 
   const channelRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
 
@@ -83,16 +92,13 @@ export function useBookmarks(userId: string | null | undefined): UseBookmarksRes
         const rowNew = payload.new ?? {};
         const rowOld = payload.old ?? {};
 
-        // ✅ Key idea:
-        // - INSERT/UPDATE: we can filter using new.user_id
-        // - DELETE: old.user_id is often NOT present unless REPLICA IDENTITY FULL,
-        //          so we use old.id (primary key) instead.
-
+        // ✅ Do NOT change this logic — it’s what fixed delete realtime:
+        // - INSERT/UPDATE: filter using new.user_id
+        // - DELETE: use old.id (because old.user_id may not exist)
         if (eventType === "INSERT") {
           if (rowNew.user_id !== userId) return;
 
           setBookmarks((prev) => {
-            // avoid duplicates if you also refresh somewhere
             if (prev.some((b) => b.id === rowNew.id)) return prev;
             return [rowNew as Bookmark, ...prev];
           });
@@ -100,7 +106,6 @@ export function useBookmarks(userId: string | null | undefined): UseBookmarksRes
         }
 
         if (eventType === "UPDATE") {
-          // if it’s not ours, ignore
           if (rowNew.user_id !== userId) return;
 
           setBookmarks((prev) => prev.map((b) => (b.id === rowNew.id ? (rowNew as Bookmark) : b)));
@@ -110,17 +115,14 @@ export function useBookmarks(userId: string | null | undefined): UseBookmarksRes
         if (eventType === "DELETE") {
           const deletedId = rowOld.id as string | undefined;
           if (!deletedId) {
-            // super rare fallback
             void refresh();
             return;
           }
 
-          // Remove locally (this makes the other tab update instantly)
           setBookmarks((prev) => prev.filter((b) => b.id !== deletedId));
           return;
         }
 
-        // Fallback safety
         void refresh();
       })
       .subscribe((status) => {
@@ -141,18 +143,19 @@ export function useBookmarks(userId: string | null | undefined): UseBookmarksRes
   const addBookmark = useCallback(
     async ({ title, url }: { title: string; url: string }) => {
       if (!userId) return;
+      if (isAdding) return; // ✅ prevent double-click spam
+
       setError(null);
+      setIsAdding(true);
 
       const cleanTitle = title.trim();
       const cleanUrl = normalizeUrl(url);
 
       if (!cleanTitle || !cleanUrl) {
         setError("Title and URL are required.");
+        setIsAdding(false);
         return;
       }
-
-      // Optional optimistic UI (current tab only)
-      // You can skip this since INSERT realtime will come back quickly.
 
       const { error: err } = await supabase.from("bookmarks").insert({
         user_id: userId,
@@ -161,30 +164,63 @@ export function useBookmarks(userId: string | null | undefined): UseBookmarksRes
       });
 
       if (err) setError(err.message);
+
+      setIsAdding(false);
     },
-    [userId]
+    [userId, isAdding]
   );
 
   const deleteBookmark = useCallback(
     async (bookmarkId: string) => {
       if (!userId) return;
 
+      // ✅ prevent double delete clicks
+      if (deletingIds.has(bookmarkId)) return;
+
       setError(null);
 
-      // ✅ Optimistic UI: current tab updates instantly
+      // ✅ Mark this row as "deleting"
+      setDeletingIds((prev) => {
+        const next = new Set(prev);
+        next.add(bookmarkId);
+        return next;
+      });
+
+      // ✅ Keep your optimistic local removal (current tab feels instant)
       setBookmarks((prev) => prev.filter((b) => b.id !== bookmarkId));
 
-      // Add user_id guard (prevents accidental deletes across users even if RLS changes)
-      const { error: err } = await supabase.from("bookmarks").delete().eq("id", bookmarkId).eq("user_id", userId);
+      // ✅ Keep user_id guard
+      const { error: err } = await supabase
+        .from("bookmarks")
+        .delete()
+        .eq("id", bookmarkId)
+        .eq("user_id", userId);
 
       if (err) {
         setError(err.message);
-        // rollback by refetching
+        // rollback safely
         void refresh();
       }
+
+      // ✅ Clear deleting state
+      setDeletingIds((prev) => {
+        const next = new Set(prev);
+        next.delete(bookmarkId);
+        return next;
+      });
     },
-    [refresh, userId]
+    [refresh, userId, deletingIds]
   );
 
-  return { bookmarks, loading, error, realtimeStatus, addBookmark, deleteBookmark, refresh };
+  return {
+    bookmarks,
+    loading,
+    error,
+    realtimeStatus,
+    isAdding,
+    deletingIds,
+    addBookmark,
+    deleteBookmark,
+    refresh,
+  };
 }
