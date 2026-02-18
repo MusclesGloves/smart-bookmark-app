@@ -193,8 +193,8 @@ LIVE Link : https://smart-bookmark-6n6nk5oqg-musclesgloves-projects.vercel.app/
 
 Build for production:
 
-npm run build
-npm start
+- npm run build
+- npm start
 
 
 ---
