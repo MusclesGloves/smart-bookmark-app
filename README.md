@@ -81,6 +81,26 @@ ALTER TABLE public.bookmarks REPLICA IDENTITY FULL;
 
 ---
 
+## 🧩 Challenges & How I Solved Them
+
+- **Realtime DELETE events not reliably removable by `new` payload**
+  - **Problem:** In realtime change payloads, DELETE events don’t include `new` row data.
+  - **Solution:** Used `payload.old.id` as the source of truth for removal and added a safe `refresh()` fallback for edge cases.
+
+- **Ensuring user privacy beyond frontend checks**
+  - **Problem:** Frontend-only filtering is insecure and easy to bypass.
+  - **Solution:** Enabled **Row Level Security (RLS)** and enforced policies so users can only read/write rows where `user_id = auth.uid()`.
+
+- **Preventing double-submit / race conditions in UI**
+  - **Problem:** Rapid clicks could trigger duplicate inserts/deletes and inconsistent state.
+  - **Solution:** Added loading/disabled states (`isAdding`, `deletingIds`) to ensure one operation completes before another starts.
+
+- **OAuth redirect issues after deployment**
+  - **Problem:** Auth redirects fail unless deployment URLs are whitelisted.
+  - **Solution:** Added the Vercel deployment URL to Supabase + Google OAuth authorized redirect URLs.
+
+---
+
 ## 🚀 Getting Started
 
 ### 1. Clone the Repository
